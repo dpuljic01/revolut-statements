@@ -1,0 +1,8 @@
+pandas
+xlsxwriter
+camelot-py[cv]
+python-dotenv
+fastapi
+uvicorn[standard]
+requests
+simplejson
