@@ -112,15 +112,20 @@ def extract_one_statement(filename):
 
     tables = filter_tables(tables)
     json_trades = table_records_to_json(tables)
-    statement = {"filename": filename, "trades": json_trades}
+    statement = {
+        "filename": filename,
+        "trades": json_trades,
+        "month": int(json_trades[1]["Trade Date"].split("/")[0]),
+    }
     return statement
 
 
 def extract_statements():
     files = os.listdir("statements")
-    pool = Pool(5)
+    pool = Pool(12)
     statements = pool.map(extract_one_statement, files)
-    return statements
+    sorted_statements = sorted(statements, key=lambda k: k["month"])
+    return sorted_statements
 
 
 @app.get("/exchange")
