@@ -4,8 +4,6 @@ import io
 import os
 from functools import partial
 from multiprocessing import Pool
-from xlsxwriter.workbook import Workbook
-
 import camelot
 import numpy as np
 import pandas as pd
@@ -13,7 +11,9 @@ import requests
 import simplejson as json  # this one handles decimals correctly
 from fastapi import FastAPI, Query
 from fastapi.responses import StreamingResponse, Response
+import logging
 
+log = logging.getLogger()
 app = FastAPI(
     title="Revolut Statement",
     description="Extracting transactions from revolut pdf statements into `json/csv/xlsx`",
@@ -21,10 +21,9 @@ app = FastAPI(
 )
 
 
-def get_pdf(path, pages="all", **kwargs):
-    # for smoother borderless table detection
-    kwargs.update({"flavor": "stream"})
-    return camelot.read_pdf(path, pages=pages, **kwargs)
+def get_pdf(path, pages="all"):
+    params = {"flavor": "stream", "edge_tol": 500}
+    return camelot.read_pdf(path, pages=pages, **params)
 
 
 def filter_data(trades):
@@ -48,12 +47,29 @@ def filter_data(trades):
 def filter_tables(tables):
     valid_tables = []
     for i in range(len(tables)):
-        if tables[i].df[0].iloc[0] != "ACTIVITY":
+        activity_ix = tables[i].df.index[tables[i].df[0] == "ACTIVITY"].to_list()
+        activity_ix = int(activity_ix[0]) if activity_ix else None
+
+        sweep_activity_ix = (
+            tables[i].df.index[tables[i].df[0] == "SWEEP ACTIVITY"].to_list()
+        )
+        sweep_activity_ix = int(sweep_activity_ix[0]) if sweep_activity_ix else None
+
+        # SELECT ITEMS BETWEEN ACTIVITY AND SWEEP ACTIVITY
+        # IF SWEEP ACTIVITY IS NULL SELECT ALL FROM ACTIVITY TO THE END
+        # IF ACTIVITY IS NULL SKIP
+        if activity_ix is None:
             continue
-        tables[i].df.columns = tables[i].df.iloc[1]
+
+        tables[i].df.columns = tables[i].df.iloc[activity_ix + 1]
+        tables[i].df = (
+            tables[i].df.iloc[activity_ix:sweep_activity_ix, :]
+            if sweep_activity_ix is not None
+            else tables[i].df.iloc[activity_ix:, :]
+        )
         tables[i].df.replace(r"^\s*$", np.nan, regex=True, inplace=True)
         tables[i].df.dropna(thresh=4, inplace=True)
-        tables[i].df = tables[i].df.iloc[1:, :]
+        tables[i].df = tables[i].df.loc[:, tables[i].df.columns.notnull()]
         valid_tables.append(tables[i])
     return valid_tables
 
@@ -113,6 +129,7 @@ def extract_one_statement(filename, buy_sell_only):
     file = os.path.join(dir_name, "statements", filename)
     tables = get_pdf(file, pages="4-end")  # we don't need first 3 pages
     if not tables.n:
+        log.warning(f"{filename} has no tables detected.")
         return
 
     tables = filter_tables(tables)
@@ -131,13 +148,14 @@ def extract_statements(filename, buy_sell_only):
     files = os.listdir("statements")
 
     statements = []
-    if filename == "all":
+    if filename == "all" or not filename:
         with Pool(12) as pool:
             statements = pool.map(
                 partial(extract_one_statement, buy_sell_only=buy_sell_only), files
             )
+            statements = [s for s in statements if s]
         sorted_statements = (
-            sorted(statements, key=lambda k: k["month"])
+            sorted(statements, key=lambda s: s["month"])
             if len(statements) > 1
             else statements
         )
