@@ -207,7 +207,7 @@ async def export_revolut_statements(
                 precise_float=True,
             )
             # max length is 32 so I can't put the whole filename
-            sheet_name = f"Sheet_{statements[i]['filename'].split('-')[0]}"
+            sheet_name = f"Sheet_{statements[i]['month']}_{statements[i]['year']}"
             df.to_excel(writer, sheet_name=sheet_name)
         writer.save()
     else:
