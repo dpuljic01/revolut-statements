@@ -23,7 +23,12 @@ app = FastAPI(
 
 def get_pdf(path, pages="all"):
     params = {"flavor": "stream", "edge_tol": 500}
-    return camelot.read_pdf(path, pages=pages, **params)
+    # columns are comma-separated x-coordinates of each column in the table
+    # ref: https://camelot-py.readthedocs.io/en/master/user/advanced.html#specify-column-separators
+    # also small hack: https://github.com/atlanhq/camelot/issues/357#issuecomment-520986016
+    cols = ["70,122,170,226,529,640,710"]
+    cols *= 128
+    return camelot.read_pdf(path, pages=pages, columns=cols, **params)
 
 
 def filter_data(trades):
@@ -69,7 +74,6 @@ def filter_tables(tables):
         )
         tables[i].df.replace(r"^\s*$", np.nan, regex=True, inplace=True)
         tables[i].df.dropna(thresh=4, inplace=True)
-        tables[i].df = tables[i].df.loc[:, tables[i].df.columns.notnull()]
         valid_tables.append(tables[i])
     return valid_tables
 
@@ -130,7 +134,7 @@ def extract_one_statement(filename, buy_sell_only):
     tables = get_pdf(file, pages="4-end")  # we don't need first 3 pages
     if not tables.n:
         log.warning(f"{filename} has no tables detected.")
-        return
+        return None
 
     tables = filter_tables(tables)
     json_trades = table_records_to_json(tables, buy_sell_only)
@@ -153,9 +157,9 @@ def extract_statements(filename, buy_sell_only):
             statements = pool.map(
                 partial(extract_one_statement, buy_sell_only=buy_sell_only), files
             )
-            statements = [s for s in statements if s]
+            statements = [s for s in statements if s is not None]
         sorted_statements = (
-            sorted(statements, key=lambda s: s["month"])
+            sorted(statements, key=lambda s: (s["year"], s["month"]))
             if len(statements) > 1
             else statements
         )
@@ -189,6 +193,16 @@ async def exchange_currency(
     return resp
 
 
+def to_unique_index(statements):
+    index = 1
+    trades = {}
+    for statement in statements:
+        for transaction in statement["trades"].values():
+            trades[index] = transaction
+            index += 1
+    return trades
+
+
 @app.get("/export")
 async def export_revolut_statements(
     format_: str = Query(
@@ -205,6 +219,10 @@ async def export_revolut_statements(
     buy_sell_only: bool = Query(
         default=False, description="Export only `BUY` and `SELL` orders."
     ),
+    single_sheet: bool = Query(
+        default=False,
+        description="Export all transactions into single excel sheet.\nNote: must be `xlsx` format",
+    ),
 ):
     statements = extract_statements(filename, buy_sell_only)
     if not statements:
@@ -218,23 +236,26 @@ async def export_revolut_statements(
     if format_ == "xlsx":
         media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         writer = pd.ExcelWriter(stream, engine="xlsxwriter")
-        for i in range(len(statements)):
+        if single_sheet:
+            trades = to_unique_index(statements)
             df = pd.read_json(
-                json.dumps(statements[i]["trades"]),
+                json.dumps(trades),
                 orient="index",
                 precise_float=True,
             )
-            # max length is 32 so I can't put the whole filename
-            sheet_name = f"Sheet_{statements[i]['month']}_{statements[i]['year']}"
-            df.to_excel(writer, sheet_name=sheet_name)
+            df.to_excel(writer, sheet_name=output_filename)
+        else:
+            for i in range(len(statements)):
+                df = pd.read_json(
+                    json.dumps(statements[i]["trades"]),
+                    orient="index",
+                    precise_float=True,
+                )
+                sheet_name = f"Sheet_{statements[i]['month']}_{statements[i]['year']}"
+                df.to_excel(writer, sheet_name=sheet_name)
         writer.save()
     else:
-        index = 1
-        trades = {}
-        for statement in statements:
-            for transaction in statement["trades"].values():
-                trades[index] = transaction
-                index += 1
+        trades = to_unique_index(statements)
         df = pd.read_json(json.dumps(trades), orient="index", precise_float=True)
         df.to_csv(stream)
 
