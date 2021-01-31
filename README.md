@@ -1,5 +1,5 @@
 
-### Extract Revolut statements
+### Export Revolut statements
 Script was mainly done for easier calculation of capital gain for the previous year.
 For trading account, Revolut only offers statements in a form of pdf, and because of that 
 it is hard to determine how much of the realized gain you had in a certain time period.
