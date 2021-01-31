@@ -206,22 +206,23 @@ def to_unique_index(statements):
 @app.get("/export")
 async def export_revolut_statements(
     format_: str = Query(
-        "json", alias="format", regex="^(json|xlsx|csv)$", description="Output format."
+        "xlsx", alias="format", regex="^(json|xlsx|csv)$", description="Output format."
     ),
     filename: str = Query(
         "all",
-        description="Filename of single statement you want to export. e.g: `statement.pdf`",
+        description="Filename of single statement you want to export. e.g: `statement.pdf`."
+                    "Use `all` to export all files which are present in the `statements` folder.",
     ),
     output_filename: str = Query(
-        "report",
-        description="Filename of exported document.",
+        "output",
+        description="Filename of exported document (without extension).",
     ),
     buy_sell_only: bool = Query(
         default=False, description="Export only `BUY` and `SELL` orders."
     ),
-    single_sheet: bool = Query(
-        default=False,
-        description="Export all transactions into single excel sheet.\nNote: must be `xlsx` format",
+    joined: bool = Query(
+        default=True,
+        description="Join output of multiple statements into a single excel sheet.\nNote: works only for `xlsx` format",
     ),
 ):
     statements = extract_statements(filename, buy_sell_only)
@@ -236,7 +237,7 @@ async def export_revolut_statements(
     if format_ == "xlsx":
         media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         writer = pd.ExcelWriter(stream, engine="xlsxwriter")
-        if single_sheet:
+        if joined:
             trades = to_unique_index(statements)
             df = pd.read_json(
                 json.dumps(trades),
